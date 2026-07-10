@@ -186,6 +186,51 @@ test('segmentPieces detects pieces on a plain background', () => {
   assert.ok(Math.abs(patch.data[mid * 3] - 160 / 255) < 0.02);
 });
 
+test('segmentPieces copes with a noisy, textured background', () => {
+  // e.g. a wooden table: per-pixel noise everywhere, not clean paper
+  const rand = mulberry32(77);
+  const w = 220, h = 140;
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) {
+    const n = () => (rand() - 0.5) * 80;
+    data[i * 4] = 168 + n(); data[i * 4 + 1] = 132 + n(); data[i * 4 + 2] = 96 + n();
+    data[i * 4 + 3] = 255;
+  }
+  for (let y = 40; y <= 95; y++) {
+    for (let x = 60; x <= 120; x++) {
+      const i = (y * w + x) * 4;
+      data[i] = 100; data[i + 1] = 90; data[i + 2] = 60; // darker wood-ish piece
+    }
+  }
+  const pieces = segmentPieces({ width: w, height: h, data });
+  assert.equal(pieces.length, 1, `found ${pieces.length}`);
+  assert.ok(Math.abs(pieces[0].x0 - 60) <= 3 && Math.abs(pieces[0].y1 - 95) <= 3,
+    `bbox ${pieces[0].x0},${pieces[0].y0}-${pieces[0].x1},${pieces[0].y1}`);
+});
+
+test('segmentPieces retries at a lower threshold for low-contrast pieces', () => {
+  // piece colour sits close to the background: first pass finds nothing,
+  // the retry pass should still pick it up
+  const rand = mulberry32(78);
+  const w = 200, h = 120;
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) {
+    const n = () => (rand() - 0.5) * 8;
+    data[i * 4] = 210 + n(); data[i * 4 + 1] = 205 + n(); data[i * 4 + 2] = 198 + n();
+    data[i * 4 + 3] = 255;
+  }
+  for (let y = 30; y <= 80; y++) {
+    for (let x = 50; x <= 110; x++) {
+      const i = (y * w + x) * 4;
+      data[i] = 228; data[i + 1] = 193; data[i + 2] = 212; // subtle pink piece
+    }
+  }
+  const pieces = segmentPieces({ width: w, height: h, data });
+  assert.equal(pieces.length, 1, `found ${pieces.length}`);
+  assert.ok(Math.abs(pieces[0].x0 - 50) <= 3 && Math.abs(pieces[0].y0 - 30) <= 3,
+    `bbox ${pieces[0].x0},${pieces[0].y0}-${pieces[0].x1},${pieces[0].y1}`);
+});
+
 test('segmentation + matching end to end', () => {
   // build a photo: grey background with one piece cut from the reference
   const ref = makeRef(240, 180, 11);

@@ -18,16 +18,40 @@ const resultCanvas = $('result-canvas');
 
 // ---------- image loading ----------
 
+async function decodeImageFile(file) {
+  // Prefer createImageBitmap with EXIF orientation applied (phone photos are
+  // often stored rotated); fall back for browsers that reject the options
+  // bag or the file format.
+  try {
+    return await createImageBitmap(file, { imageOrientation: 'from-image' });
+  } catch { /* fall through */ }
+  try {
+    return await createImageBitmap(file);
+  } catch { /* fall through */ }
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('unsupported image format'));
+    };
+    img.src = url;
+  });
+}
+
 async function fileToImageData(file, maxDim) {
-  const bmp = await createImageBitmap(file);
-  const scale = Math.min(1, maxDim / Math.max(bmp.width, bmp.height));
-  const w = Math.max(1, Math.round(bmp.width * scale));
-  const h = Math.max(1, Math.round(bmp.height * scale));
+  const bmp = await decodeImageFile(file);
+  const bw = bmp.width || bmp.naturalWidth;
+  const bh = bmp.height || bmp.naturalHeight;
+  const scale = Math.min(1, maxDim / Math.max(bw, bh));
+  const w = Math.max(1, Math.round(bw * scale));
+  const h = Math.max(1, Math.round(bh * scale));
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
   const ctx = c.getContext('2d');
   ctx.drawImage(bmp, 0, 0, w, h);
-  bmp.close();
+  if (bmp.close) bmp.close();
   return ctx.getImageData(0, 0, w, h);
 }
 
@@ -143,7 +167,11 @@ $('ref-reset-crop').addEventListener('click', () => {
 $('ref-input').addEventListener('change', async (ev) => {
   const file = ev.target.files[0];
   if (!file) return;
-  setReference(await fileToImageData(file, 1000));
+  try {
+    setReference(await fileToImageData(file, 1000));
+  } catch {
+    addStatus('Could not read that photo — the format may be unsupported by this browser. Try another photo.');
+  }
 });
 
 function currentGrid() {
@@ -164,7 +192,13 @@ $('piece-count').addEventListener('input', updateGridHint);
 
 $('pieces-input').addEventListener('change', async (ev) => {
   for (const file of ev.target.files) {
-    const img = await fileToImageData(file, 1200);
+    let img;
+    try {
+      img = await fileToImageData(file, 1200);
+    } catch {
+      addStatus('Could not read a pieces photo — the format may be unsupported by this browser. Try another photo.');
+      continue;
+    }
     const found = segmentPieces(img);
     if (found.length === 0) {
       addStatus('No pieces detected in that photo. Try a plainer background or better lighting.');

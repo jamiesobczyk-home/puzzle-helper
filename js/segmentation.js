@@ -34,7 +34,9 @@ export function estimateBackground(img) {
   }
   dists.sort((a, b) => a - b);
   const p90 = dists[Math.floor(dists.length * 0.9)] || 0;
-  const threshold = Math.max(30, p90 * 1.8 + 12);
+  // Capped: a busy border (wood grain, clutter at the photo edge) must not
+  // push the threshold so high that real pieces never clear it.
+  const threshold = Math.max(26, Math.min(p90 * 1.8 + 12, 78));
   return { color: bg, threshold };
 }
 
@@ -73,10 +75,22 @@ function morph(mask, w, h, erode) {
 
 // Find connected components of the foreground mask, largest first.
 // Returns [{ x0, y0, x1, y1, area, mask }] where mask is local to the bbox.
+//
+// If nothing clears the border-derived threshold (pieces whose colours sit
+// close to the background, e.g. muted art on a grey table), one retry runs
+// at a lower threshold before giving up.
 export function segmentPieces(img, opts = {}) {
-  const w = img.width, h = img.height;
   const bg = opts.background || estimateBackground(img);
-  let mask = buildMask(img, bg);
+  const first = segmentAtThreshold(img, bg.color, bg.threshold, opts);
+  if (first.length > 0) return first;
+  const retryT = Math.max(18, bg.threshold * 0.6);
+  if (retryT >= bg.threshold) return first;
+  return segmentAtThreshold(img, bg.color, retryT, opts);
+}
+
+function segmentAtThreshold(img, color, threshold, opts) {
+  const w = img.width, h = img.height;
+  let mask = buildMask(img, { color, threshold });
   mask = morph(morph(mask, w, h, true), w, h, false);   // open: kill speckle
   mask = morph(morph(mask, w, h, false), w, h, true);   // close: fill pinholes
 
