@@ -11,7 +11,17 @@ table.
 
 ## Using it
 
-Serve the folder with any static file server and open it in a browser:
+The app is deployed with GitHub Pages:
+
+**https://jamiesobczyk-home.github.io/puzzle-helper/**
+
+On an iPhone, open that link in Safari; for quick access from the puzzle
+table, tap Share → **Add to Home Screen** and it opens like an app. Every
+push to `main` runs the tests and redeploys automatically
+(`.github/workflows/deploy-pages.yml`).
+
+To run it locally instead, serve the folder with any static file server and
+open it in a browser:
 
 ```
 python3 -m http.server 8000
