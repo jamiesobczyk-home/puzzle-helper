@@ -283,6 +283,45 @@ test('segmentPieces fills false holes where print matches the background', () =>
   assert.equal(p.mask[hy * bw + hx], 1, 'hole not filled');
 });
 
+test('watershed refinement recovers camouflaged piece regions', () => {
+  // A piece whose right side is printed in the exact background colour.
+  // The colour threshold can never keep it — the only cue is the faint
+  // physical edge line (below threshold, but a gradient ridge) and the
+  // fact that the printed transition inside the piece is soft.
+  const w = 240, h = 140;
+  const data = new Uint8ClampedArray(w * h * 4);
+  const set = (x, y, r, g, b) => {
+    const i = (y * w + x) * 4;
+    data[i] = r; data[i + 1] = g; data[i + 2] = b; data[i + 3] = 255;
+  };
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) set(x, y, 210, 205, 198);
+  const px0 = 50, py0 = 30, px1 = 179, py1 = 109; // piece 130x80
+  for (let y = py0; y <= py1; y++) {
+    for (let x = px0; x <= px1; x++) {
+      const t = Math.min(1, Math.max(0, (x - (px0 + 55)) / 30)); // soft blend
+      set(x, y,
+        Math.round(40 + (210 - 40) * t),
+        Math.round(90 + (205 - 90) * t),
+        Math.round(160 + (198 - 160) * t));
+    }
+  }
+  // faint physical edge line: 2px ring, below the colour threshold
+  for (let y = py0 - 2; y <= py1 + 2; y++) {
+    for (let x = px0 - 2; x <= px1 + 2; x++) {
+      if (x >= px0 && x <= px1 && y >= py0 && y <= py1) continue;
+      set(x, y, 196, 191, 184);
+    }
+  }
+  const pieces = segmentPieces({ width: w, height: h, data });
+  assert.equal(pieces.length, 1, `found ${pieces.length}`);
+  const p = pieces[0];
+  const bw = p.x1 - p.x0 + 1;
+  // centre of the camouflaged right side must be part of the mask
+  const cx = 160 - p.x0, cy = 70 - p.y0;
+  assert.ok(cx >= 0 && cx < bw, `bbox lost the right side: ${p.x0}-${p.x1}`);
+  assert.equal(p.mask[cy * bw + cx], 1, 'camouflaged region not recovered');
+});
+
 test('segmentation + matching end to end', () => {
   // build a photo: grey background with one piece cut from the reference
   const ref = makeRef(240, 180, 11);
