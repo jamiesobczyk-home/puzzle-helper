@@ -127,21 +127,208 @@ function segmentAtThreshold(img, color, threshold, opts) {
     // border. Real pieces stay chunky — aspect well under 4 even with tabs.
     const touchesEdge = x0 <= 1 || y0 <= 1 || x1 >= w - 2 || y1 >= h - 2;
     if (touchesEdge && Math.max(bw / bh, bh / bw) > 4) continue;
-    let local = new Uint8Array(bw * bh);
-    let filled = area;
+    const local = new Uint8Array(bw * bh);
     for (const i of members) {
       const x = i % w, y = (i - x) / w;
       local[(y - y0) * bw + (x - x0)] = 1;
     }
     // Printed areas that happen to match the background colour punch false
-    // holes in the piece; fill anything not reachable from outside, then
-    // shave the rim, which tends to carry the piece's cast shadow.
-    filled += fillHoles(local, bw, bh);
-    local = erodeRim(local, bw, bh, Math.max(1, Math.round(Math.min(bw, bh) * 0.02)));
-    pieces.push({ x0, y0, x1, y1, area: filled, mask: local });
+    // holes in the piece; fill anything not reachable from outside.
+    fillHoles(local, bw, bh);
+    // Snap the outline to the piece's physical edge; if that fails, keep
+    // the colour mask with its shadow rim shaved.
+    const piece = refineMask(img, x0, y0, x1, y1, local)
+      || finishColorMask(x0, y0, x1, y1, local);
+    pieces.push(piece);
   }
   pieces.sort((a, b) => b.area - a.area);
   return pieces.slice(0, opts.maxPieces || 24);
+}
+
+// Previous behaviour, used when watershed refinement is skipped or fails:
+// colour mask with the rim (which tends to carry the cast shadow) shaved.
+function finishColorMask(x0, y0, x1, y1, local) {
+  const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+  const mask = erodeRim(local, bw, bh, Math.max(1, Math.round(Math.min(bw, bh) * 0.02)));
+  let area = 0;
+  for (let i = 0; i < bw * bh; i++) area += mask[i];
+  return { x0, y0, x1, y1, area, mask };
+}
+
+// Refine a piece's colour-threshold mask so its outline follows the piece's
+// PHYSICAL edge rather than colour changes in the printed picture.
+//
+// Marker-based watershed (Meyer flooding) on the gradient image: the eroded
+// colour mask seeds "piece", the window frame seeds "background", and both
+// flood in order of ascending gradient. The fronts meet on the strongest
+// gradient ridge between them — the cut-cardboard/contact-shadow line — so
+// printed regions that happen to match the table colour are claimed for the
+// piece, because they sit inside that ridge.
+function refineMask(img, x0, y0, x1, y1, local) {
+  const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+  if (Math.min(bw, bh) < 32) return null; // too small for a meaningful edge
+  // The detected bbox may be missing camouflaged parts of the piece, so the
+  // window (whose frame seeds "background") must be padded generously enough
+  // to contain the whole physical piece.
+  const pad = Math.min(500, Math.round(Math.max(bw, bh) * 0.75) + 4);
+  const wx0 = Math.max(0, x0 - pad), wy0 = Math.max(0, y0 - pad);
+  const wx1 = Math.min(img.width - 1, x1 + pad), wy1 = Math.min(img.height - 1, y1 + pad);
+  const ww = wx1 - wx0 + 1, wh = wy1 - wy0 + 1;
+
+  // gradient magnitude, max over channels, quantised to 0..255
+  const grad = new Uint8Array(ww * wh);
+  const iw = img.width, d = img.data;
+  for (let y = 0; y < wh; y++) {
+    const sy = wy0 + y;
+    const ym = Math.max(0, sy - 1), yp = Math.min(img.height - 1, sy + 1);
+    for (let x = 0; x < ww; x++) {
+      const sx = wx0 + x;
+      const xm = Math.max(0, sx - 1), xp = Math.min(iw - 1, sx + 1);
+      let g = 0;
+      for (let c = 0; c < 3; c++) {
+        const gx = d[(sy * iw + xp) * 4 + c] - d[(sy * iw + xm) * 4 + c];
+        const gy = d[(yp * iw + sx) * 4 + c] - d[(ym * iw + sx) * 4 + c];
+        const m = Math.abs(gx) + Math.abs(gy);
+        if (m > g) g = m;
+      }
+      grad[y * ww + x] = Math.min(255, g >> 1);
+    }
+  }
+
+  // markers: 1 = piece (eroded colour mask), 2 = background (window frame)
+  const label = new Uint8Array(ww * wh);
+  const seed = erodeRim(local, bw, bh, Math.max(3, Math.round(Math.min(bw, bh) * 0.06)));
+  let seedCount = 0;
+  for (let y = 0; y < bh; y++) {
+    for (let x = 0; x < bw; x++) {
+      if (seed[y * bw + x]) { label[(y + y0 - wy0) * ww + (x + x0 - wx0)] = 1; seedCount++; }
+    }
+  }
+  if (seedCount < 16) return null;
+  for (let x = 0; x < ww; x++) {
+    if (!label[x]) label[x] = 2;
+    if (!label[(wh - 1) * ww + x]) label[(wh - 1) * ww + x] = 2;
+  }
+  for (let y = 0; y < wh; y++) {
+    if (!label[y * ww]) label[y * ww] = 2;
+    if (!label[y * ww + ww - 1]) label[y * ww + ww - 1] = 2;
+  }
+
+  // Meyer flooding with a bucket queue over gradient levels
+  const buckets = new Array(256);
+  for (let b = 0; b < 256; b++) buckets[b] = [];
+  const pendLab = new Uint8Array(ww * wh); // 0 = not queued
+  const enqueue = (j, lab, level) => {
+    if (label[j] || pendLab[j]) return;
+    pendLab[j] = lab;
+    buckets[Math.max(level, grad[j])].push(j);
+  };
+  const nbrs = (i, fn) => {
+    const x = i % ww;
+    if (x > 0) fn(i - 1);
+    if (x < ww - 1) fn(i + 1);
+    if (i >= ww) fn(i - ww);
+    if (i < ww * (wh - 1)) fn(i + ww);
+  };
+  for (let i = 0; i < ww * wh; i++) {
+    if (label[i]) nbrs(i, (j) => enqueue(j, label[i], grad[j]));
+  }
+  for (let b = 0; b < 256; b++) {
+    const q = buckets[b];
+    for (let k = 0; k < q.length; k++) { // q may grow while iterating
+      const i = q[k];
+      if (label[i]) continue;
+      label[i] = pendLab[i];
+      nbrs(i, (j) => enqueue(j, label[i], b));
+    }
+  }
+
+  // keep only the seed-connected piece region, fill holes, light rim shave
+  const refined = new Uint8Array(ww * wh);
+  const stack = [];
+  for (let y = 0; y < bh; y++) {
+    for (let x = 0; x < bw; x++) {
+      if (!seed[y * bw + x]) continue;
+      const i = (y + y0 - wy0) * ww + (x + x0 - wx0);
+      if (!refined[i]) { refined[i] = 1; stack.push(i); }
+    }
+  }
+  while (stack.length) {
+    const i = stack.pop();
+    nbrs(i, (j) => { if (label[j] === 1 && !refined[j]) { refined[j] = 1; stack.push(j); } });
+  }
+  // Shape prior: pieces are solid, so narrow ragged bays (print edges the
+  // flood couldn't cross) are impossible — a wide closing fills them while
+  // leaving the broader, legitimate tab/blank indentations alone.
+  closeMask(refined, ww, wh, Math.max(3, Math.round(Math.min(bw, bh) * 0.06)));
+  fillHoles(refined, ww, wh);
+  const shaved = erodeRim(refined, ww, wh, Math.max(1, Math.round(Math.min(bw, bh) * 0.015)));
+
+  // tight bbox + area of the result
+  let rx0 = ww, ry0 = wh, rx1 = -1, ry1 = -1, area = 0;
+  for (let y = 0; y < wh; y++) {
+    for (let x = 0; x < ww; x++) {
+      if (!shaved[y * ww + x]) continue;
+      area++;
+      if (x < rx0) rx0 = x; if (x > rx1) rx1 = x;
+      if (y < ry0) ry0 = y; if (y > ry1) ry1 = y;
+    }
+  }
+  // sanity: a leak or collapse means the edge wasn't findable — fall back
+  let colorArea = 0;
+  for (let i = 0; i < bw * bh; i++) colorArea += local[i];
+  if (rx1 < 0 || area < colorArea * 0.6 || area > colorArea * 1.8) return null;
+
+  const nw = rx1 - rx0 + 1, nh = ry1 - ry0 + 1;
+  const mask = new Uint8Array(nw * nh);
+  for (let y = 0; y < nh; y++) {
+    for (let x = 0; x < nw; x++) {
+      mask[y * nw + x] = shaved[(y + ry0) * ww + (x + rx0)];
+    }
+  }
+  return { x0: wx0 + rx0, y0: wy0 + ry0, x1: wx0 + rx1, y1: wy0 + ry1, area, mask };
+}
+
+// Morphological closing with an (approximately) disc-shaped element of
+// radius r, in place: dilate then erode, both via two-pass 3-4 chamfer
+// distance transforms so large radii stay cheap.
+function closeMask(mask, w, h, r) {
+  const INF = 1 << 28;
+  const dist = new Int32Array(w * h);
+  const chamfer = (isSet) => {
+    for (let i = 0; i < w * h; i++) dist[i] = isSet(i) ? 0 : INF;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = y * w + x;
+        let v = dist[i];
+        if (x > 0 && dist[i - 1] + 3 < v) v = dist[i - 1] + 3;
+        if (y > 0) {
+          if (dist[i - w] + 3 < v) v = dist[i - w] + 3;
+          if (x > 0 && dist[i - w - 1] + 4 < v) v = dist[i - w - 1] + 4;
+          if (x < w - 1 && dist[i - w + 1] + 4 < v) v = dist[i - w + 1] + 4;
+        }
+        dist[i] = v;
+      }
+    }
+    for (let y = h - 1; y >= 0; y--) {
+      for (let x = w - 1; x >= 0; x--) {
+        const i = y * w + x;
+        let v = dist[i];
+        if (x < w - 1 && dist[i + 1] + 3 < v) v = dist[i + 1] + 3;
+        if (y < h - 1) {
+          if (dist[i + w] + 3 < v) v = dist[i + w] + 3;
+          if (x < w - 1 && dist[i + w + 1] + 4 < v) v = dist[i + w + 1] + 4;
+          if (x > 0 && dist[i + w - 1] + 4 < v) v = dist[i + w - 1] + 4;
+        }
+        dist[i] = v;
+      }
+    }
+  };
+  const r3 = r * 3;
+  chamfer((i) => mask[i] === 1);            // distance to the piece
+  for (let i = 0; i < w * h; i++) mask[i] = dist[i] <= r3 ? 1 : 0; // dilate
+  chamfer((i) => mask[i] === 0);            // distance to the background
+  for (let i = 0; i < w * h; i++) mask[i] = dist[i] > r3 ? 1 : 0;  // erode
 }
 
 // Set every background pixel not reachable from the bbox border (an
