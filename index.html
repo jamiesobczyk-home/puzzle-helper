@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Puzzle Piece Finder</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%F0%9F%A7%A9%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header>
+    <h1>Puzzle Piece Finder</h1>
+    <p class="tagline">Photograph the box, scan your pieces, and get told where they go.</p>
+  </header>
+
+  <main>
+    <section id="step-reference" class="card">
+      <h2><span class="step-num">1</span> The picture on the box</h2>
+      <p>Take a photo of the box art (or the example page from inside the box).
+         Then drag on the image to crop it down to just the puzzle picture —
+         tight crops give better matches.</p>
+      <div class="controls">
+        <label class="file-btn">
+          Choose / take box photo
+          <input type="file" id="ref-input" accept="image/*">
+        </label>
+        <button id="ref-reset-crop" disabled>Reset crop</button>
+        <button id="demo-btn" type="button">Try a demo instead</button>
+      </div>
+      <div class="canvas-wrap">
+        <canvas id="ref-canvas" hidden></canvas>
+      </div>
+      <p id="ref-hint" class="hint" hidden>Drag a rectangle over the puzzle picture to crop. Current crop is highlighted.</p>
+      <div class="controls">
+        <label>Pieces in the puzzle
+          <input type="number" id="piece-count" value="500" min="4" max="10000" step="1">
+        </label>
+        <span class="hint" id="grid-hint"></span>
+      </div>
+    </section>
+
+    <section id="step-pieces" class="card">
+      <h2><span class="step-num">2</span> Your puzzle pieces</h2>
+      <p>Lay one or more pieces picture-side up on a plain background
+         (a sheet of paper works well) and take a photo. You can add several photos.</p>
+      <div class="controls">
+        <label class="file-btn">
+          Choose / take pieces photo
+          <input type="file" id="pieces-input" accept="image/*" multiple>
+        </label>
+        <button id="pieces-clear" disabled>Clear pieces</button>
+      </div>
+      <div id="piece-list" class="piece-list"></div>
+    </section>
+
+    <section id="step-match" class="card">
+      <h2><span class="step-num">3</span> Where do they go?</h2>
+      <div class="controls">
+        <button id="match-btn" class="primary" disabled>Find placements</button>
+        <progress id="match-progress" max="1" value="0" hidden></progress>
+      </div>
+      <div class="canvas-wrap">
+        <canvas id="result-canvas" hidden></canvas>
+      </div>
+      <div id="results"></div>
+    </section>
+  </main>
+
+  <footer>
+    <p>Everything runs in your browser — no photos leave your device.</p>
+  </footer>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
