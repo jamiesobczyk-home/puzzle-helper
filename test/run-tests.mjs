@@ -231,6 +231,33 @@ test('segmentPieces retries at a lower threshold for low-contrast pieces', () =>
     `bbox ${pieces[0].x0},${pieces[0].y0}-${pieces[0].x1},${pieces[0].y1}`);
 });
 
+test('segmentPieces ignores a mat edge crossing the frame border', () => {
+  // modelled on a real failure: cream piece on a brown board, with the blue
+  // edge of the puzzle mat visible along the bottom of the photo
+  const rand = mulberry32(79);
+  const w = 240, h = 180;
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) {
+    const n = () => (rand() - 0.5) * 24;
+    data[i * 4] = 128 + n(); data[i * 4 + 1] = 109 + n(); data[i * 4 + 2] = 101 + n();
+    data[i * 4 + 3] = 255;
+  }
+  const paint = (x0, y0, x1, y1, r, g, b) => {
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = (y * w + x) * 4;
+        data[i] = r; data[i + 1] = g; data[i + 2] = b;
+      }
+    }
+  };
+  paint(0, 160, w - 1, h - 1, 30, 90, 140);   // blue mat edge, full width
+  paint(80, 50, 150, 110, 235, 228, 205);     // cream piece
+  const pieces = segmentPieces({ width: w, height: h, data });
+  assert.equal(pieces.length, 1, `found ${pieces.length}`);
+  assert.ok(Math.abs(pieces[0].x0 - 80) <= 3 && Math.abs(pieces[0].y0 - 50) <= 3,
+    `bbox ${pieces[0].x0},${pieces[0].y0}-${pieces[0].x1},${pieces[0].y1}`);
+});
+
 test('segmentation + matching end to end', () => {
   // build a photo: grey background with one piece cut from the reference
   const ref = makeRef(240, 180, 11);

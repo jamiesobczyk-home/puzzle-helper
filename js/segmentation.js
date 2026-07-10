@@ -122,6 +122,11 @@ function segmentAtThreshold(img, color, threshold, opts) {
     next++;
     if (area < minArea) continue;
     const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+    // Background clutter reaching across the frame (a mat or table edge in
+    // shot) is not a piece: skip long, thin components pinned to the image
+    // border. Real pieces stay chunky — aspect well under 4 even with tabs.
+    const touchesEdge = x0 <= 1 || y0 <= 1 || x1 >= w - 2 || y1 >= h - 2;
+    if (touchesEdge && Math.max(bw / bh, bh / bw) > 4) continue;
     const local = new Uint8Array(bw * bh);
     for (const i of members) {
       const x = i % w, y = (i - x) / w;
