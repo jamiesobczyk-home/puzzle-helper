@@ -6,9 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 # Only one deploy at a time; don't cancel a deploy already in flight.
 concurrency:
@@ -25,21 +23,21 @@ jobs:
           node-version: 22
       - run: node test/run-tests.mjs
 
+  # Publish the site by rewriting the gh-pages branch, which GitHub Pages
+  # serves from. (The artifact-based deploy-pages flow needs the Pages site
+  # created via API, which the workflow token isn't allowed to do.)
   deploy:
     needs: test
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-        with:
-          # Creates the Pages site on first run so no manual
-          # Settings -> Pages step is needed.
-          enablement: true
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: .
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Publish to gh-pages
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan gh-pages
+          git rm -r --cached . -q
+          touch .nojekyll
+          git add .nojekyll index.html css js README.md
+          git commit -q -m "Deploy site from ${GITHUB_SHA}"
+          git push --force origin gh-pages
