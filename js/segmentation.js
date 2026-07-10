@@ -127,15 +127,59 @@ function segmentAtThreshold(img, color, threshold, opts) {
     // border. Real pieces stay chunky — aspect well under 4 even with tabs.
     const touchesEdge = x0 <= 1 || y0 <= 1 || x1 >= w - 2 || y1 >= h - 2;
     if (touchesEdge && Math.max(bw / bh, bh / bw) > 4) continue;
-    const local = new Uint8Array(bw * bh);
+    let local = new Uint8Array(bw * bh);
+    let filled = area;
     for (const i of members) {
       const x = i % w, y = (i - x) / w;
       local[(y - y0) * bw + (x - x0)] = 1;
     }
-    pieces.push({ x0, y0, x1, y1, area, mask: local });
+    // Printed areas that happen to match the background colour punch false
+    // holes in the piece; fill anything not reachable from outside, then
+    // shave the rim, which tends to carry the piece's cast shadow.
+    filled += fillHoles(local, bw, bh);
+    local = erodeRim(local, bw, bh, Math.max(1, Math.round(Math.min(bw, bh) * 0.02)));
+    pieces.push({ x0, y0, x1, y1, area: filled, mask: local });
   }
   pieces.sort((a, b) => b.area - a.area);
   return pieces.slice(0, opts.maxPieces || 24);
+}
+
+// Set every background pixel not reachable from the bbox border (an
+// enclosed hole) to foreground. Returns the number of pixels filled.
+function fillHoles(mask, w, h) {
+  const reach = new Uint8Array(w * h);
+  const stack = [];
+  const push = (i) => { if (!mask[i] && !reach[i]) { reach[i] = 1; stack.push(i); } };
+  for (let x = 0; x < w; x++) { push(x); push((h - 1) * w + x); }
+  for (let y = 0; y < h; y++) { push(y * w); push(y * w + w - 1); }
+  while (stack.length) {
+    const i = stack.pop();
+    const x = i % w, y = (i - x) / w;
+    if (x > 0) push(i - 1);
+    if (x < w - 1) push(i + 1);
+    if (y > 0) push(i - w);
+    if (y < h - 1) push(i + w);
+  }
+  let filled = 0;
+  for (let i = 0; i < w * h; i++) {
+    if (!mask[i] && !reach[i]) { mask[i] = 1; filled++; }
+  }
+  return filled;
+}
+
+function erodeRim(mask, w, h, iters) {
+  let cur = mask;
+  for (let k = 0; k < iters; k++) {
+    const out = new Uint8Array(w * h);
+    for (let y = 1; y < h - 1; y++) {
+      for (let x = 1; x < w - 1; x++) {
+        const i = y * w + x;
+        if (cur[i] && cur[i - 1] && cur[i + 1] && cur[i - w] && cur[i + w]) out[i] = 1;
+      }
+    }
+    cur = out;
+  }
+  return cur;
 }
 
 // Cut a piece out of the source photo as a matcher Patch

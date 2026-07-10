@@ -258,6 +258,31 @@ test('segmentPieces ignores a mat edge crossing the frame border', () => {
     `bbox ${pieces[0].x0},${pieces[0].y0}-${pieces[0].x1},${pieces[0].y1}`);
 });
 
+test('segmentPieces fills false holes where print matches the background', () => {
+  const w = 200, h = 120;
+  const data = new Uint8ClampedArray(w * h * 4);
+  for (let i = 0; i < w * h; i++) {
+    data[i * 4] = 210; data[i * 4 + 1] = 205; data[i * 4 + 2] = 198; data[i * 4 + 3] = 255;
+  }
+  const paint = (x0, y0, x1, y1, r, g, b) => {
+    for (let y = y0; y <= y1; y++) {
+      for (let x = x0; x <= x1; x++) {
+        const i = (y * w + x) * 4;
+        data[i] = r; data[i + 1] = g; data[i + 2] = b;
+      }
+    }
+  };
+  paint(50, 30, 130, 90, 40, 90, 160);        // piece
+  paint(75, 50, 105, 70, 210, 205, 198);      // printed area == background colour
+  const pieces = segmentPieces({ width: w, height: h, data });
+  assert.equal(pieces.length, 1, `found ${pieces.length}`);
+  const p = pieces[0];
+  const bw = p.x1 - p.x0 + 1;
+  // the hole must be part of the mask (centre of the painted-over region)
+  const hx = 90 - p.x0, hy = 60 - p.y0;
+  assert.equal(p.mask[hy * bw + hx], 1, 'hole not filled');
+});
+
 test('segmentation + matching end to end', () => {
   // build a photo: grey background with one piece cut from the reference
   const ref = makeRef(240, 180, 11);
